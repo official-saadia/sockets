@@ -21,7 +21,6 @@ public class Client implements AutoCloseable {
     public Client() {
     }
 
-    // Package-private: lets unit tests inject streams directly, without a real socket.
     Client(BufferedReader in, PrintWriter out) {
         this.in = in;
         this.out = out;
@@ -35,6 +34,7 @@ public class Client implements AutoCloseable {
         logger.info("Connecting to " + host + ":" + port + "...");
         try {
             socket = new Socket(host, port);
+            // Prevents readLine() from blocking forever if the server never responds.
             socket.setSoTimeout(readTimeoutMs);
             out = new PrintWriter(socket.getOutputStream(), true, StandardCharsets.UTF_8);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
@@ -46,6 +46,9 @@ public class Client implements AutoCloseable {
     }
 
     public String sendMessage(String message) throws IOException {
+        // Both sides talk in terms of readLine()/println(), so a message containing
+        // a newline would be split into two messages on the other end. Reject it here
+        // to keep the line-based framing the whole protocol depends on.
         if (message.contains("\n") || message.contains("\r")) {
             String errorMessage = "message must not contain line breaks: \"" + message + "\"";
             logger.warning(errorMessage);

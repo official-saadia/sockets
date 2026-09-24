@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -14,12 +15,19 @@ public class Server {
     private static final Logger logger = Logger.getLogger(Server.class.getName());
 
     public void start(int port) throws IOException {
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
+        try (
+                // Binds a socket to the given port and starts listening for connections.
+                ServerSocket serverSocket = new ServerSocket(port)) {
             logger.info("Server started on port " + port + ". Waiting for a client to connect...");
 
-            try (Socket clientSocket = serverSocket.accept();
-                 BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-                 PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true)) {
+            try (
+                    // Blocks until a client connects, then returns a socket for that specific connection.
+                    Socket clientSocket = serverSocket.accept();
+                    // Wraps the socket's input stream so incoming text can be read line by line.
+                    // UTF-8 is explicit here so it matches the client's encoding exactly.
+                    BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8));
+                    // Wraps the socket's output stream so text can be sent back to the client.
+                    PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true, StandardCharsets.UTF_8)) {
 
                 logger.info("Client connected from " + clientSocket.getInetAddress());
                 handleSession(in, out);
@@ -35,6 +43,7 @@ public class Server {
         }
     }
 
+    // Echoes each line back to the client until "bye" is received.
     void handleSession(BufferedReader in, PrintWriter out) throws IOException {
         String input;
         while ((input = in.readLine()) != null) {
