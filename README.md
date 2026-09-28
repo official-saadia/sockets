@@ -29,20 +29,61 @@ that limit, and the rest of the machine keeps running normally. If no limit is s
 most of the machine's available memory, which can slow down or affect other programs running on the same
 machine as well.
 
+Under heavy concurrent load, clients experience SocketTimeoutExceptions when the server's occupied worker threads
+force incoming requests into a backup queue. If the queue delay exceeds the client's configured read timeout 
+threshold before a worker thread processes the request, the client times out while waiting.
+
 ### BoundedExecutorServer
-This is an optimized version of ExecutorServer. In real world applications, clients are not kept in a waiting
-state by the server indefinitely. The server makes them wait for a configured time, and if a slot is still not
-available after that, a proper message is sent to the client, i.e., "Server is busy at the moment, please try
-again after some time." This also caps the previously-unbounded queue, removing that remaining crash risk.
+This is an optimized version of ExecutorServer designed for high resilience
+and predictable behavior under intense load.
+
+In real-world applications, clients are not kept in a waiting state by the
+server indefinitely. The server makes them wait for a configured time, and
+if a slot is still not available after that, a proper message is sent to
+the client, i.e., "Server is busy , please try again later"
+
+This introduces a critical pattern known as **Load Shedding**. By capping
+the previously-unbounded queue with a fixed-capacity `ArrayBlockingQueue`,
+we completely remove the remaining memory crash risk.
+
+How it works:
+* The active worker threads and bounded waiting queue are restricted to fixed limits.
+* A custom `WaitThenRejectPolicy` dictates how overflows are handled.
+* When the server is maxed out, instead of hanging silently, incoming
+  connections wait briefly for a slot. If the grace period expires, they are
+  turned away with an immediate, clear response.
+
+By rejecting excess traffic early, the server preserves its internal memory,
+protects existing active sessions from slowing down, and guarantees
+predictable response times under heavy load.
+
 
 ### Client
 Client sends the message to the server and then reads the response back from the server. It can send and
 receive multiple messages.
 
 ## Testing
-Server, Client, and ThreadedServer's client-handling logic each have both unit tests and integration tests.
+Server, Client, and ThreadedServer's client-handling logic each have both
+unit tests and integration tests.
 
-- **Unit tests** exercise the message-handling logic directly using in-memory streams, without opening any
-  real socket.
-- **Integration tests** start a real server and connect to it over an actual socket, verifying the classes
-  work correctly together over a real network connection.
+* **Unit tests:** Exercise the message-handling logic directly using in-memory
+  streams, without opening any real socket.
+* **Integration tests:** Start a real server and connect to it over an actual
+  socket, verifying the classes work correctly together over a real network
+  connection.
+* **Load Testing:** The `LoadTester` class stress-tests how different server
+  architectures handle high volume:
+  * **ExecutorServer:** Excessive concurrent requests get stuck in the
+    unbounded waiting queue, causing client-side socket read timeouts.
+  * **BoundedExecutorServer:** Excessive concurrent requests hit strict limits
+    and are gracefully rejected with a clear "Server is Busy" notification.
+
+### Running the Load Test
+To run a load test from the command line, compile your classes and execute
+the `LoadTester` class. You can optionally pass custom arguments:
+`[port] [clientCount] [holdConnectionOpen] [waitTimeMs]`
+
+**Example Command (Standard Run):**
+```bash
+java LoadTester 6663 500 true 300
+```

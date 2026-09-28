@@ -75,7 +75,7 @@ class ClientIntegrationTest {
             silentServerThread.start();
 
             try (Client silentClient = new Client()) {
-                silentClient.connect("localhost", silentPort, 300); // short timeout for a fast test
+                silentClient.connect("localhost", silentPort, 300, 1); // short timeout for a fast test
 
                 assertThrows(SocketTimeoutException.class, () -> silentClient.sendMessage("hello"));
             }

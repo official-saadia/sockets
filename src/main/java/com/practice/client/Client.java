@@ -17,6 +17,7 @@ public class Client implements AutoCloseable {
     private Socket socket;
     private BufferedReader in;
     private PrintWriter out;
+    private int id;
 
     public Client() {
     }
@@ -27,11 +28,12 @@ public class Client implements AutoCloseable {
     }
 
     public void connect(String host, int port) throws IOException {
-        connect(host, port, DEFAULT_READ_TIMEOUT_MS);
+        connect(host, port, DEFAULT_READ_TIMEOUT_MS, 1);
     }
 
-    public void connect(String host, int port, int readTimeoutMs) throws IOException {
-        logger.info("Connecting to " + host + ":" + port + "...");
+    public void connect(String host, int port, int readTimeoutMs, int id) throws IOException {
+        this.id = id;
+        logger.info("Client: " + id + " Connecting to " + host + ":" + port + "...");
         try {
             socket = new Socket(host, port);
             // Prevents readLine() from blocking forever if the server never responds.
@@ -41,11 +43,16 @@ public class Client implements AutoCloseable {
             logger.info("Connected to " + host + ":" + port);
         } catch (IOException e) {
             logger.log(Level.SEVERE, "Failed to connect to " + host + ":" + port, e);
+            cleanupPartialResources(); // Clear half-initialized structures on failure
             throw e;
         }
     }
 
     public String sendMessage(String message) throws IOException {
+        if (message == null) {
+            throw new IllegalArgumentException("Message cannot be null");
+        }
+
         // Both sides talk in terms of readLine()/println(), so a message containing
         // a newline would be split into two messages on the other end. Reject it here
         // to keep the line-based framing the whole protocol depends on.
@@ -56,10 +63,10 @@ public class Client implements AutoCloseable {
         }
 
         try {
-            logger.info("Sending: " + message);
+            logger.info("Sending message from client: " + id + ":: " + message);
             out.println(message);
             String response = in.readLine();
-            logger.info("Received: " + response);
+            logger.info("Received by client: " + id + ":: " + response);
             return response;
         } catch (IOException e) {
             logger.log(Level.SEVERE, "Error sending/receiving message: " + message, e);
@@ -67,32 +74,30 @@ public class Client implements AutoCloseable {
         }
     }
 
+    private void cleanupPartialResources() {
+        if (in != null) { try { in.close(); } catch (IOException ignored) {} }
+        if (out != null) { out.close(); }
+        if (socket != null) { try { socket.close(); } catch (IOException ignored) {} }
+    }
+
     @Override
     public void close() throws IOException {
-        logger.info("Closing client connection...");
-        if (in != null) {
-            in.close();
-        }
-        if (out != null) {
-            out.close();
-        }
-        if (socket != null) {
-            socket.close();
-        }
-        logger.info("Client connection closed.");
+        logger.info("Closing client connection with id " + id);
+        cleanupPartialResources();
+        logger.info("Client connection closed.id " + id);
     }
 
     public static void main(String[] args) throws IOException {
         try (Client client = new Client();
-             BufferedReader consoleIn = new BufferedReader(new InputStreamReader(System.in))) {
+             BufferedReader consoleIn = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
 
-            client.connect("localhost", 6661);
+            client.connect("localhost", 6663); // Matches the server port standard
 
             String input;
             while ((input = consoleIn.readLine()) != null) {
                 String response = client.sendMessage(input);
                 System.out.println("Response: " + response);
-                if (input.equals("bye")) {
+                if ("bye".equalsIgnoreCase(input.trim())) {
                     break;
                 }
             }
