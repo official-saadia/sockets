@@ -68,6 +68,10 @@ The client's port isn't chosen by the developer at all; the OS assigns an availa
 <text x="340" y="150" text-anchor="middle" font-size="12" fill="#5F5E5A">TCP connection</text>
 </svg>
 
+## How Sockets Work
+
+![Normal Socket Lifecycle Flow](./images/sockets-flow.png)
+
 # Code Walkthrough
 
 Now let's see how the concepts above show up as actual code — starting with the server side.
@@ -262,3 +266,53 @@ A few things worth connecting back to what we covered:
 - `setSoTimeout` prevents `readLine()` from blocking forever if the server never responds — without it, a dropped connection could hang the client indefinitely.
 - The line-break check in `sendMessage` isn't just input validation — both sides communicate one line at a time via `readLine()`/`println()`, so a message containing a newline would be read as two separate messages on the other end. This directly protects the ordered, line-based framing the protocol depends on.
   One thing worth knowing: if the server closes the connection unexpectedly, `in.readLine()` returns `null` rather than throwing — so `sendMessage` returns `null`, and `main` prints `"Response: null"` instead of crashing.
+
+## SocketTimeoutException: Read timed out
+```
+SEVERE: Error sending/receiving message: hello from client 83
+java.net.SocketTimeoutException: Read timed out
+..................
+at com.practice.client.Client.sendMessage(Client.java:68)
+at com.practice.loadTest.LoadTester.lambda$main$0(LoadTester.java:37)
+```
+The exception occurs in the case of ExecutorServer when the thread pool is full
+and cannot handle the incoming load. By default, a Java socket client waits
+indefinitely, which is dangerous for real-world applications.
+
+We must set a timeout boundary for the client. In this scenario, we enforce a
+client timeout using `socket.setSoTimeout()`. You can adjust this threshold
+depending upon your system's requirements. Modern production standards for
+typical applications target 2 to 5 seconds for connection handshakes and 5 to
+10 seconds for read timeouts to prevent thread pool starvation bugs.
+
+Because the server's thread pool is exhausted, it cannot process the heavy
+burst of concurrent traffic and parks the excessive connections inside its
+internal waiting queue. When the client fails to receive an echo response
+within its designated deadline, instead of hanging indefinitely, it throws a
+`SocketTimeoutException: Read timed out` because the **client** was unable to
+read a response from the server.
+
+![Socket Timeout Bottleneck Flow](./images/sockets-timeout-flow.jpg)
+
+## How the Rejection Policy Works 
+When the server gets completely full (all worker threads are busy and the backup queue is packed),
+the next connection triggers the rejectedExecution policy. 
+
+This policy runs synchronously on the Main Thread (the one running the serverSocket.accept() loop).
+Instead of turning the client away instantly, we want the server to wait for 3 seconds to see if an active worker
+finishes a chat and frees up a slot.
+
+If the Main Thread sits and waits for those 3 seconds, the entire server freezes. 
+The front door slams shut, and any other incoming clients will time out at the network boundary.
+
+To prevent a total freeze, the Main Thread instantly hands the overflowing client over to a
+lightweight Virtual Thread and immediately loops back to accept more connections.
+The Virtual Thread acts as an independent holding area for that specific client.
+
+An active chat finishes within 3 seconds, freeing a slot. The Virtual Thread slips the client into the queue,
+and they get processed normally.
+
+The 3 seconds run out and the server is still maxed out. The Virtual Thread steps in, writes the "Server is busy" 
+message directly to the client, and gracefully closes the connection.
+
+![How Rejection Policy Works](./images/rejection-policy.jpg)
