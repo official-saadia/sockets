@@ -63,10 +63,10 @@ public class Client implements AutoCloseable {
         }
 
         try {
-            logger.info("Sending message from client: " + id + ":: " + message);
+            logger.info("Sending message from client: " + id + " :: " + message);
             out.println(message);
             String response = in.readLine();
-            logger.info("Received by client: " + id + ":: " + response);
+            logger.info("Received by client: " + id + " :: " + response);
             return response;
         } catch (IOException e) {
             logger.log(Level.SEVERE, "Error sending/receiving message: " + message, e);

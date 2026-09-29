@@ -57,6 +57,44 @@ By rejecting excess traffic early, the server preserves its internal memory,
 protects existing active sessions from slowing down, and guarantees
 predictable response times under heavy load.
 
+## VirtualThreadServer
+
+This implementation leverages Java Virtual Threads to handle significantly more concurrent users than traditional thread-pool architectures.
+
+Because virtual threads automatically unmount from their underlying OS carrier threads during blocking operations, other waiting virtual threads can seamlessly take their place.
+
+In this specific code, the virtual thread will unmount in two distinct places:
+
+1. When hitting **`in.readLine()`** while waiting for a client to type and stream a message over the network.
+2. When hitting **`Thread.sleep(1000)`** during the simulated network processing delay.
+
+During the unmounting process, the thread's execution context and stack frames are saved directly to the Java Heap.
+
+While this allows the server to easily sustain thousands of concurrent sessions, it shifts the system bottleneck to memory resources.
+
+Spawning hundreds of thousands of unconstrained virtual threads simultaneously can exhaust your heap space, ultimately triggering an `OutOfMemoryError`.
+
+***
+
+## BoundedVirtualThreadServer
+
+To prevent `OutOfMemoryError` conditions under massive traffic spikes, this server implements explicit backpressure using a Dual-Semaphore architecture to throttle concurrent users.
+
+Two distinct semaphores regulate the workflow: one caps the active execution capacity, and the other bounds the maximum size of the waiting queue holding area.
+
+When hitting **`executionCeiling.acquire()`** if the active slots are full and the thread has to wait in line for an 
+execution permit. Here is virtual thread is also unmounted.
+
+If traffic burst exceeds the total combined capacity of both boundaries, any subsequent connections are immediately routed to a lightweight load-shedding routine.
+
+This routine responds with a `'Server is busy. Please try again later'` payload before gracefully dropping the socket.
+
+While highly resilient, this pattern shifts the responsibility onto the developer to carefully check constraints before acquiring resources.
+
+You must manually coordinate guaranteed permit releases inside `finally` blocks to prevent permanent capacity starvation.
+
+
+
 
 ### Client
 Client sends the message to the server and then reads the response back from the server. It can send and
