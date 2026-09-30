@@ -1,127 +1,94 @@
 # SOCKETS
 
-This project is to build the knowledge about sockets.
+A hands-on project to build the knowledge of Java sockets, focusing on
+diagnosing system bottlenecks, handling network traffic bursts, and evolving
+blocking thread architectures into non-blocking event loops.
 
 ## Requirements
 - Java 16 or later (BoundedExecutorServer's rejection policy uses a record)
 
-## Implementation
-### Server
-Server class implements a basic server which receives a message from the client and then echoes it back. This is the
-most basic version. Only a single client can connect and interact with the server.
+## Project Architectures
 
-### ThreadedServer
-This version supports multiple clients by using Threads. Each client will have its own thread and can interact
-with the server on its dedicated thread.
-Any number of clients can connect to the server as there is no upper bound set here and the system can crash.
+This repository walks through different socket implementations, showing the
+limitations of each and how the next version solves it:
 
+### Server Implementations
+*   **Server:** A basic server that receives a message from the client and
+    echoes it back. This is the most basic version. Only a single client
+    can connect and interact with the server.
+*   **ThreadedServer:** Solves the single-client problem by using Threads.
+    Each client has its own dedicated thread to interact with the server.
+    However, there is no upper bound set here, and the system can crash
+    from thread exhaustion.
+*   **ExecutorServer:** Optimizes thread management by using an
+    `ExecutorService` with a fixed upper bound on threads. If the limit is
+    reached, new clients must wait in a waiting queue. Because this queue is
+    unbounded, massive load can still cause a memory crash. Under heavy load,
+    delayed clients will throw `SocketTimeoutException` errors.
+*   **BoundedExecutorServer:** Resolves the unbounded queue issue by capping
+    it using an `ArrayBlockingQueue`. It introduces a critical pattern known
+    as **Load Shedding**. When capacity overflows, a custom rejection policy
+    waits briefly for 3 seconds before turning excess clients away with a
+    clear "Server is busy" response.
+*   **VirtualThreadServer:** Leverages Java 21 Virtual Threads to handle
+    significantly more concurrent users. Threads unmount from the OS carrier
+    thread during blocking actions (like `in.readLine()` and
+    `Thread.sleep()`), saving their state on the Java Heap. Without
+    guardrails, an unconstrained flood of connections can trigger an
+    `OutOfMemoryError`.
+*   **BoundedVirtualThreadServer:** Introduces backpressure to prevent memory
+    crashes using a Dual-Semaphore architecture. If traffic burst exceeds
+    the boundaries, excess connections are immediately routed to a
+    load-shedding routine that sends a "Server is busy" message and drops
+    the socket.
+*   **NIOServer:** Built using the non-blocking I/O API. It handles thousands
+    of concurrent connections utilizing an Event Loop architecture. It uses
+    a single thread for all the clients, meaning no waiting queues, no
+    rejection policies, and no out of memory errors. This makes it the best
+    choice for chat applications.
 
-### ExecutorServer
-This version is an optimization of ThreadedServer. It uses ExecutorService so that Java takes care of the
-thread management. It also sets an upper bound on threads.
-If the upper bound is reached, more clients have to wait until a thread becomes available. The queue holding
-waiting clients has no limit, so under massive load it can still grow unbounded and eventually crash the
-server, just from memory instead of threads.
+### Client Implementations
+*   **Client:** Client sends the message to the server and then reads the
+    response back from the server. It can send and receive multiple messages.
+*   **NIOClient:** A non-blocking client designed to communicate with the
+    NIOServer. Instead of using blocking streams, it uses a Selector engine
+    to listen for server responses and read console input asynchronously,
+    preventing the network loop from hanging.
 
-Whether that crash affects only this application or the whole machine depends on how much memory the JVM
-is allowed to use (its max heap size). If a limit is set, the application crashes on its own once it hits
-that limit, and the rest of the machine keeps running normally. If no limit is set, the queue can consume
-most of the machine's available memory, which can slow down or affect other programs running on the same
-machine as well.
-
-Under heavy concurrent load, clients experience SocketTimeoutExceptions when the server's occupied worker threads
-force incoming requests into a backup queue. If the queue delay exceeds the client's configured read timeout 
-threshold before a worker thread processes the request, the client times out while waiting.
-
-### BoundedExecutorServer
-This is an optimized version of ExecutorServer designed for high resilience
-and predictable behavior under intense load.
-
-In real-world applications, clients are not kept in a waiting state by the
-server indefinitely. The server makes them wait for a configured time, and
-if a slot is still not available after that, a proper message is sent to
-the client, i.e., "Server is busy , please try again later"
-
-This introduces a critical pattern known as **Load Shedding**. By capping
-the previously-unbounded queue with a fixed-capacity `ArrayBlockingQueue`,
-we completely remove the remaining memory crash risk.
-
-How it works:
-* The active worker threads and bounded waiting queue are restricted to fixed limits.
-* A custom `WaitThenRejectPolicy` dictates how overflows are handled.
-* When the server is maxed out, instead of hanging silently, incoming
-  connections wait briefly for a slot. If the grace period expires, they are
-  turned away with an immediate, clear response.
-
-By rejecting excess traffic early, the server preserves its internal memory,
-protects existing active sessions from slowing down, and guarantees
-predictable response times under heavy load.
-
-## VirtualThreadServer
-
-This implementation leverages Java Virtual Threads to handle significantly more concurrent users than traditional thread-pool architectures.
-
-Because virtual threads automatically unmount from their underlying OS carrier threads during blocking operations, other waiting virtual threads can seamlessly take their place.
-
-In this specific code, the virtual thread will unmount in two distinct places:
-
-1. When hitting **`in.readLine()`** while waiting for a client to type and stream a message over the network.
-2. When hitting **`Thread.sleep(1000)`** during the simulated network processing delay.
-
-During the unmounting process, the thread's execution context and stack frames are saved directly to the Java Heap.
-
-While this allows the server to easily sustain thousands of concurrent sessions, it shifts the system bottleneck to memory resources.
-
-Spawning hundreds of thousands of unconstrained virtual threads simultaneously can exhaust your heap space, ultimately triggering an `OutOfMemoryError`.
-
-***
-
-## BoundedVirtualThreadServer
-
-To prevent `OutOfMemoryError` conditions under massive traffic spikes, this server implements explicit backpressure using a Dual-Semaphore architecture to throttle concurrent users.
-
-Two distinct semaphores regulate the workflow: one caps the active execution capacity, and the other bounds the maximum size of the waiting queue holding area.
-
-When hitting **`executionCeiling.acquire()`** if the active slots are full and the thread has to wait in line for an 
-execution permit. Here is virtual thread is also unmounted.
-
-If traffic burst exceeds the total combined capacity of both boundaries, any subsequent connections are immediately routed to a lightweight load-shedding routine.
-
-This routine responds with a `'Server is busy. Please try again later'` payload before gracefully dropping the socket.
-
-While highly resilient, this pattern shifts the responsibility onto the developer to carefully check constraints before acquiring resources.
-
-You must manually coordinate guaranteed permit releases inside `finally` blocks to prevent permanent capacity starvation.
-
-
-
-
-### Client
-Client sends the message to the server and then reads the response back from the server. It can send and
-receive multiple messages.
+---
 
 ## Testing
 Server, Client, and ThreadedServer's client-handling logic each have both
 unit tests and integration tests.
 
-* **Unit tests:** Exercise the message-handling logic directly using in-memory
-  streams, without opening any real socket.
-* **Integration tests:** Start a real server and connect to it over an actual
-  socket, verifying the classes work correctly together over a real network
-  connection.
-* **Load Testing:** The `LoadTester` class stress-tests how different server
-  architectures handle high volume:
-  * **ExecutorServer:** Excessive concurrent requests get stuck in the
-    unbounded waiting queue, causing client-side socket read timeouts.
-  * **BoundedExecutorServer:** Excessive concurrent requests hit strict limits
-    and are gracefully rejected with a clear "Server is Busy" notification.
+*   **Unit tests:** Exercise the message-handling logic directly using
+    in-memory streams, without opening any real socket.
+*   **Integration tests:** Start a real server and connect to it over an
+    actual socket, verifying the classes work correctly together over a real
+    network connection.
+*   **Load Testing:** The `LoadTester` class stress-tests how different
+    server architectures handle high volume:
+  *   **ExecutorServer:** Excessive concurrent requests get stuck in the
+      unbounded waiting queue, causing client-side socket read timeouts.
+  *   **BoundedExecutorServer:** Excessive concurrent requests hit strict
+      limits and are gracefully rejected with a clear "Server is Busy"
+      notification.
+  *   **NIOLoadTester:** Stress-tests the non-blocking loop by spawning
+      multiple concurrent non-blocking connections, verifying that a
+      single-threaded server handles high concurrent traffic with flat
+      memory usage.
 
-### Running the Load Test
-To run a load test from the command line, compile your classes and execute
-the `LoadTester` class. You can optionally pass custom arguments:
+### Running the Load Tests
+To run a load test from the command line, compile your classes and execute your
+chosen testing utility class. You can optionally pass custom arguments:
 `[port] [clientCount] [holdConnectionOpen] [waitTimeMs]`
 
-**Example Command (Standard Run):**
+#### 1. Running the Standard Load Test (Thread Pools)
 ```bash
-java LoadTester 6663 500 true 300
+java com.practice.loadTest.LoadTester 6661 500 true 300
+```
+
+#### 2. Running the NIO Load Test (Non-Blocking Loop)
+```bash
+java com.practice.loadTest.NIOLoadTester 6663 500 true 300
 ```
