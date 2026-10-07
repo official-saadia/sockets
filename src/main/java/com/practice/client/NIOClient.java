@@ -15,14 +15,15 @@ import java.util.logging.Logger;
 
 /**
  * High-performance, non-blocking network client utilizing Java NIO.
- * Listens for server responses and reads user console input concurrently using a Selector.
+ * A Selector listens for server responses. Console input is read on a separate thread,
+ * because System.in cannot be registered with a Selector.
  */
 public class NIOClient implements AutoCloseable {
     private static final Logger log = Logger.getLogger(NIOClient.class.getName());
 
     private Selector selector;
     private SocketChannel clientChannel;
-    private boolean running = true;
+    private volatile boolean running = true;
 
     public void connect(String host, int port) throws IOException {
         // 1. Open the Selector engine to listen for server responses
@@ -37,33 +38,34 @@ public class NIOClient implements AutoCloseable {
         clientChannel.connect(new InetSocketAddress(host, port));
 
         // 4. Register the channel to watch for when the connection finishes or data arrives
-        clientChannel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
+        clientChannel.register(selector, SelectionKey.OP_CONNECT);
 
-        // 5. Spin up a quick background thread to handle user console typing
-        startConsoleReaderThread();
+        // The Main Client Event Loop
+        try {
+            while (running) {
+                selector.select(); // Blocks efficiently until network traffic occurs (or stop() wakes it up)
 
-        // 🔄 The Main Client Event Loop
-        while (running) {
-            selector.select(); // Blocks efficiently until network traffic occurs
+                Set<SelectionKey> selectedKeys = selector.selectedKeys();
+                Iterator<SelectionKey> iterator = selectedKeys.iterator();
 
-            Set<SelectionKey> selectedKeys = selector.selectedKeys();
-            Iterator<SelectionKey> iterator = selectedKeys.iterator();
+                while (iterator.hasNext()) {
+                    SelectionKey key = iterator.next();
+                    iterator.remove();
 
-            while (iterator.hasNext()) {
-                SelectionKey key = iterator.next();
-                iterator.remove();
+                    if (!key.isValid()) continue;
 
-                if (!key.isValid()) continue;
-
-                // Case A: The connection handshaking is ready to finish
-                if (key.isConnectable()) {
-                    handleConnect(key);
-                }
-                // Case B: The server sent an incoming message back to us
-                else if (key.isReadable()) {
-                    handleRead(key);
+                    // Case A: The connection handshaking is ready to finish
+                    if (key.isConnectable()) {
+                        handleConnect(key);
+                    }
+                    // Case B: The server sent an incoming message back to us
+                    else if (key.isReadable()) {
+                        handleRead(key);
+                    }
                 }
             }
+        } finally {
+            closeResources(); // closed here, so nothing is closed underneath a running select()
         }
     }
 
@@ -76,6 +78,8 @@ public class NIOClient implements AutoCloseable {
                 log.info("Successfully connected to the NIO Server!");
                 // Keep watching this lane specifically for incoming READ messages
                 channel.register(selector, SelectionKey.OP_READ);
+                // Only now is it safe to let the user type messages
+                startConsoleReaderThread();
             } else {
                 log.severe("Failed to finalize server connection.");
                 stop();
@@ -90,7 +94,7 @@ public class NIOClient implements AutoCloseable {
         try {
             int bytesRead = channel.read(buffer);
 
-            // Server closed the connection abruptly
+            // -1 means the server closed the connection in an orderly way (an abrupt close throws IOException)
             if (bytesRead == -1) {
                 log.warning("Server disconnected the line.");
                 stop();
@@ -132,15 +136,17 @@ public class NIOClient implements AutoCloseable {
             try (Scanner scanner = new Scanner(System.in)) {
                 while (running) {
                     System.out.print("Enter message: ");
-                    if (scanner.hasNextLine()) {
-                        String line = scanner.nextLine();
-                        sendMessage(line);
+                    if (!scanner.hasNextLine()) { // end of input (for example Ctrl+D)
+                        stop();
+                        break;
+                    }
+                    String line = scanner.nextLine();
+                    sendMessage(line);
 
-                        if ("bye".equalsIgnoreCase(line.trim())) {
-                            log.info("Exiting console session.");
-                            stop();
-                            break;
-                        }
+                    if ("bye".equalsIgnoreCase(line.trim())) {
+                        log.info("Exiting console session.");
+                        stop();
+                        break;
                     }
                 }
             }
@@ -154,8 +160,13 @@ public class NIOClient implements AutoCloseable {
         stop();
     }
 
+    // Safe to call from any thread: it only wakes the event loop, which then exits and closes everything.
     public void stop() {
         this.running = false;
+        if (selector != null) selector.wakeup();
+    }
+
+    private void closeResources() {
         try {
             if (selector != null) selector.close();
             if (clientChannel != null) clientChannel.close();

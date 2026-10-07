@@ -7,12 +7,7 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.RejectedExecutionHandler;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -28,10 +23,6 @@ public class BoundedExecutorServer {
     private final static int WAITING_QUEUE_CAPACITY = 10; // Fixed headroom beyond the active threads
     private final static long REJECT_WAIT_TIMEOUT = 3;
     private final static TimeUnit REJECT_WAIT_UNIT = TimeUnit.SECONDS;
-
-    // Maximum duration a task is allowed to sit queued before a thread picks it up.
-    // This bounds the secondary waiting window to prevent processing stale requests.
-    private final static long MAX_QUEUE_RESIDENCY_MS = 4000;
 
     private ServerSocket serverSocket;
     private final BlockingQueue<Runnable> workQueue = new ArrayBlockingQueue<>(WAITING_QUEUE_CAPACITY);
